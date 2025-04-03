@@ -1,28 +1,21 @@
 package main
 
-import "errors"
+import (
+	"log"
 
-var store = make(map[string]string)
-var ErrorNoSuchKey = errors.New("no such key")
+	"github.com/fasthttp/router"
+	"github.com/masonbrott/sigilkv/handlers"
+	"github.com/masonbrott/sigilkv/transaction"
+	"github.com/valyala/fasthttp"
+)
 
-func Put(key string, value string) error {
-	store[key] = value
+func main() {
+	transaction.InitializeTransactionLog()
 
-	return nil
-}
+	r := router.New()
+	r.PUT("/v1/key/{key}", handlers.KVPutHandler)
+	r.GET("/v1/key/{key}", handlers.KVGetHandler)
+	r.DELETE("/v1/key/{key}", handlers.KVDeleteHandler)
 
-func Get(key string) (string, error) {
-	value, ok := store[key]
-
-	if !ok {
-		return "", ErrorNoSuchKey
-	}
-
-	return value, nil
-}
-
-func Delete(key string) error {
-	delete(store, key)
-
-	return nil
+	log.Fatal(fasthttp.ListenAndServe(":8080", r.Handler))
 }

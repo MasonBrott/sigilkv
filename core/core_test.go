@@ -1,8 +1,17 @@
-package main
+package core
 
 import (
+	"sync"
 	"testing"
 )
+
+// Helper to reset the store for tests
+func resetStore() {
+	store = struct {
+		sync.RWMutex
+		m map[string]string
+	}{m: make(map[string]string)}
+}
 
 func TestPut(t *testing.T) {
 	testCases := []struct {
@@ -47,14 +56,14 @@ func TestPut(t *testing.T) {
 		// Use t.Run to create a subtest for each case
 		t.Run(testcase.name, func(t *testing.T) {
 			// Reset the global store and populate initial state for this specific test case
-			store = make(map[string]string)
+			resetStore()
 			for k, v := range testcase.initial {
-				store[k] = v
+				store.m[k] = v // Access the nested map
 			}
 
 			// Use t.Cleanup to ensure the store is reset after this subtest finishes
 			t.Cleanup(func() {
-				store = make(map[string]string) // Reset for the next test case
+				resetStore() // Reset for the next test case
 			})
 
 			err := Put(testcase.key, testcase.value)
@@ -63,7 +72,10 @@ func TestPut(t *testing.T) {
 			}
 
 			// Verify the value was stored correctly
-			storedValue, ok := store[testcase.key]
+			// Need to lock for reading here as we are directly accessing the map
+			store.RLock()
+			storedValue, ok := store.m[testcase.key] // Access the nested map
+			store.RUnlock()
 			if !ok {
 				t.Errorf("Value for key %q not found in store after Put", testcase.key)
 			} else if storedValue != testcase.value {
@@ -71,13 +83,19 @@ func TestPut(t *testing.T) {
 			}
 
 			// Optional: Check if other keys were unexpectedly added/modified (more relevant in complex cases)
-			if len(store) > len(testcase.initial) && testcase.initial[testcase.key] == "" { // Check only if it was a new key
-				if len(store) != len(testcase.initial)+1 {
-					t.Errorf("Store size is incorrect after Put: got %d, expected %d or %d", len(store), len(testcase.initial), len(testcase.initial)+1)
+			store.RLock() // Lock for reading length
+			storeLen := len(store.m)
+			store.RUnlock()
+			initialLen := len(testcase.initial)
+			_, keyExistedInInitial := testcase.initial[testcase.key] // Check if the key was in the initial map
+
+			if !keyExistedInInitial { // If it was a new key insert
+				if storeLen != initialLen+1 {
+					t.Errorf("Store size is incorrect after new Put: got %d, expected %d", storeLen, initialLen+1)
 				}
-			} else if len(store) != len(testcase.initial) && testcase.initial[testcase.key] != "" { // Check if it was an overwrite
-				if len(store) != len(testcase.initial) {
-					t.Errorf("Store size is incorrect after Put (overwrite): got %d, expected %d", len(store), len(testcase.initial))
+			} else { // If it was an overwrite
+				if storeLen != initialLen {
+					t.Errorf("Store size is incorrect after Put (overwrite): got %d, expected %d", storeLen, initialLen)
 				}
 			}
 		})
@@ -124,13 +142,13 @@ func TestGet(t *testing.T) {
 
 	for _, testcase := range testCases {
 		t.Run(testcase.name, func(t *testing.T) {
-			store = make(map[string]string)
+			resetStore()
 			for k, v := range testcase.initial {
-				store[k] = v
+				store.m[k] = v // Access the nested map
 			}
 
 			t.Cleanup(func() {
-				store = make(map[string]string)
+				resetStore()
 			})
 
 			value, err := Get(testcase.key)
@@ -181,18 +199,20 @@ func TestDelete(t *testing.T) {
 
 	for _, testcase := range testCases {
 		t.Run(testcase.name, func(t *testing.T) {
-			store = make(map[string]string)
+			resetStore()
 			for k, v := range testcase.initial {
-				store[k] = v
+				store.m[k] = v // Access the nested map
 			}
 
 			t.Cleanup(func() {
-				store = make(map[string]string)
+				resetStore()
 			})
 
 			// Store initial state for size comparison later
-			initialSize := len(store)
-			_, keyExistedInitially := store[testcase.key]
+			store.RLock() // Lock for reading
+			initialSize := len(store.m)
+			_, keyExistedInitially := store.m[testcase.key]
+			store.RUnlock()
 
 			err := Delete(testcase.key)
 			if err != nil {
@@ -200,13 +220,17 @@ func TestDelete(t *testing.T) {
 			}
 
 			// Verify the key is actually gone
-			_, keyExistsAfterDelete := store[testcase.key]
+			store.RLock() // Lock for read check
+			_, keyExistsAfterDelete := store.m[testcase.key]
+			store.RUnlock()
 			if keyExistsAfterDelete {
 				t.Errorf("key %q was not deleted from store", testcase.key)
 			}
 
 			// Verify the map size changed appropriately
-			finalSize := len(store)
+			store.RLock() // Lock for reading length
+			finalSize := len(store.m)
+			store.RUnlock()
 			expectedSize := initialSize
 			if keyExistedInitially {
 				expectedSize = initialSize - 1
